@@ -1,0 +1,172 @@
+# Tinfoil Container definition for the STAGING assistant enclave.
+#
+# NOTHING HAS BEEN DEPLOYED FROM THIS FILE. It is the shape of a staging
+# enclave, reviewed in git, so that bringing one up is a checklist rather than
+# an evening of improvisation (docs/staging.md §The staging enclave).
+#
+# Read that section before changing a line here. The three things this file
+# exists to guarantee, none of which are cosmetic:
+#
+#   1. A STAGING MEASUREMENT CAN NEVER BE MISTAKEN FOR THE PRODUCTION ONE.
+#      @tinfoilsh/verifier reads `releases/latest` from whatever owner/repo it
+#      is handed, and `tinfoil container create` defaults to
+#      `--promote-release true`, which moves that pointer. So the moment a
+#      staging release is cut into kaifaust/peachy-enclave, production's hourly
+#      check (server/worker-attest.ts), pchy.app/verify in every visitor's
+#      browser, and the iOS and macOS client verifications all begin comparing
+#      the LIVE production enclave against a staging measurement and reporting
+#      a mismatch. A separate tag series inside one repo does NOT help, because
+#      `latest` is not tag-scoped. Hence: this file is released into a SECOND
+#      public config repo, kaifaust/peachy-enclave-stg, and never into
+#      kaifaust/peachy-enclave.
+#
+#   2. NO PATH TO PRODUCTION DATA. Every egress host below is a staging host,
+#      and peachy-db's production hostname is deliberately absent — an enclave
+#      cannot dial a name its measured allowlist does not carry. The secret
+#      scoping is the other half of this, and it is the one genuinely
+#      unresolved question: see docs/staging.md §The secret-scope collision.
+#
+#   3. THE SHAPE IS PRODUCTION'S SHAPE. Same cvm-version, same cpus/memory,
+#      same read_only + tmpfs, same healthcheck, same shim. A staging enclave
+#      that runs on a different shape rehearses a different system, exactly as
+#      a staging Blueprint that rebuilds on a different path list would.
+#
+# Schema: github.com/tinfoilsh/tinfoil-config. Resources are measured and
+# immutable; the decoder rejects unknown fields, wildcards and IP literals in
+# `allow`, and any `image` without a digest.
+
+cvm-version: 0.14.7
+
+# The smallest shape on offer (2 cores / 8 GB), and the same one production
+# runs. At $0.06/core/hr + $0.01/GB/hr that is $0.20 an hour — which is the
+# whole argument for running this enclave EPHEMERALLY: a two-hour verification
+# session costs about 40 cents, and a deleted container costs nothing.
+# docs/staging.md §Cost has the arithmetic.
+cpus: 2
+memory: 8192
+
+networks:
+  egress:
+    # Hostnames only, IPv4 only, re-resolved about every 60s, no wildcards.
+    # RFC1918 is blocked regardless, which is why the Postgres host below must
+    # be the EXTERNAL Render hostname rather than the internal `dpg-…-a` form.
+    egress: allowlist
+    allow:
+      # PLACEHOLDER. peachy-db-stg does not exist, so neither does its external
+      # hostname. Fill this in from Render's
+      # `/v1/postgres/<id>/connection-info` once the instance is created, and
+      # note that the production instance's hostname
+      # (dpg-d9jrmi67r5hc73ddemi0-a.oregon-postgres.render.com) MUST NOT appear
+      # here. That absence is the structural guarantee: a measured allowlist
+      # without production's database name in it is an enclave that cannot
+      # reach production's database, whatever its DATABASE_URL happens to say.
+      - dpg-STAGING-PLACEHOLDER-a.oregon-postgres.render.com
+      # The model provider. One, as in production.
+      - inference.tinfoil.sh
+      # Attestation of inference.tinfoil.sh at boot (server/tinfoil-attest.ts
+      # via @tinfoilsh/verifier). These three hosts are the whole measured set;
+      # re-measure after bumping the verifier, because a missing host here
+      # fails closed as a 503 on every run.
+      - github-proxy.tinfoil.sh
+      - kds-proxy.tinfoil.sh
+      # The assistant's tools run in-process, so search_places' two outbound
+      # legs are this process's egress: a text query goes to
+      # places.googleapis.com and the current-location branch to
+      # maps.googleapis.com. Both hosts or neither — the second one was missing
+      # from production's list until 2026-09-18 and the failure was silent by
+      # construction (docs/tinfoil-container.md §Measured egress).
+      - places.googleapis.com
+      - maps.googleapis.com
+      # PLACEHOLDER. The STAGING R2 buckets' S3 endpoint and public media host,
+      # derived from stg's R2_ACCOUNT_ID and R2_PUBLIC_BASE_URL once those
+      # buckets exist. If staging keeps the production Cloudflare account (the
+      # isolation is the bucket, not the account — docs/staging.md §Which
+      # secrets must differ), the S3 endpoint is the same host production uses
+      # and only the public base URL differs.
+      - c6b00e1a7686e9f69631784067aef768.r2.cloudflarestorage.com
+      - pub-STAGING-PLACEHOLDER.r2.dev
+
+containers:
+  - name: worker
+    # PLACEHOLDER, and it stays one on main for the same reason production's
+    # does: the digest is what the attestation commits to, so a copy-pasteable
+    # non-zero digest here is a float waiting to happen. The release step
+    # substitutes the real digest into the tagged copy in the staging config
+    # repo.
+    #
+    # Note the tag series: `stg-v0.0.x`, never `v0.0.x`. The tags live in a
+    # different repo from production's and the image tags should differ too,
+    # so that a digest read off a job summary cannot be pasted into the wrong
+    # release by muscle memory.
+    image: ghcr.io/kaifaust/peachy-assistant:stg-v0.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    networks: [egress]
+    env:
+      # server/db.ts productionSignal() keys off RENDER; keep the fail-safe
+      # armed here exactly as production does.
+      - RENDER: "1"
+      # The one env value that differs from production's, and it is the one a
+      # human reads first in a log line. Anything that reports which process it
+      # is says `-stg` out loud.
+      - RENDER_SERVICE_NAME: peachy-assistant-stg-tinfoil
+      # Same pin as production: the cgroup files are not readable inside an
+      # enclave, so server/container.ts takes its fail-safe of 2 and this
+      # overrules it. Staging rehearses production's concurrency or it
+      # rehearses nothing.
+      - PEACHY_MAX_CONCURRENT_RUNS: "4"
+      - PEACHY_HEALTH_PORT: "8080"
+      - NODE_COMPILE_CACHE: /tmp/peachy-agent-cc
+      # Public by design, and measured: which provider and which models read a
+      # person's messages is part of what the attestation commits to. Keep
+      # these identical to production's unless the POINT of the staging run is
+      # to rehearse a model change — in which case changing them here, cutting
+      # a staging release and reading the difference on /healthz/config IS the
+      # rehearsal, and it is the cheapest one this tier buys.
+      - PEACHY_INFERENCE_PROVIDER: tinfoil
+      - PEACHY_TINFOIL_MODEL: glm-5-3-flash
+      - PEACHY_TINFOIL_FAST_MODEL: deepseek-v4-1-flash
+      # Both rung-2 flags on, as in production. The API side of each is set
+      # separately in Doppler; either side alone is safe, because an unclaimed
+      # job times out into the existing no-verdict path and fails OPEN.
+      - PEACHY_TRIAGE_IN_WORKER: "1"
+      - PEACHY_TAGGER_IN_WORKER: "1"
+    # Names only; the values are resolved at deploy time from the container's
+    # REPOSITORY secrets first and the ORGANIZATION secrets second. That
+    # resolution order is the entire safety question for this file, and it is
+    # not yet settled for this org — every one of these nine names exists
+    # today as an ORGANIZATION secret holding a PRODUCTION value, and Tinfoil
+    # documents that a name cannot be held at both scopes within one
+    # organization. Read docs/staging.md §The secret-scope collision before
+    # deploying anything from this file; a staging enclave that silently
+    # resolves DATABASE_URL to production's database is the single worst
+    # outcome this whole document is arranged to prevent.
+    secrets:
+      - DATABASE_URL
+      - TINFOIL_API_KEY
+      - GOOGLE_MAPS_API_KEY
+      - R2_ACCOUNT_ID
+      - R2_ACCESS_KEY_ID
+      - R2_SECRET_ACCESS_KEY
+      - R2_BUCKET
+      - R2_PUBLIC_BASE_URL
+      - R2_PRIVATE_BUCKET
+    read_only: true
+    tmpfs:
+      /tmp: "size=1g,mode=1777"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 90s
+    restart: always
+    stop_signal: SIGTERM
+    stop_timeout: 30
+
+# Mandatory — a deployment must forward something. Only the two health paths
+# are exposed; there is no inbound rpc surface by design, because the worker's
+# inputs and outputs cross Postgres.
+shim:
+  upstream-port: 8080
+  paths:
+    - /healthz
+    - /healthz/config
