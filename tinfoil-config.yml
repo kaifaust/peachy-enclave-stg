@@ -72,6 +72,15 @@ networks:
       # fails closed as a 503 on every run.
       - github-proxy.tinfoil.sh
       - kds-proxy.tinfoil.sh
+      # This container's own public hostname, which attestSelf dials to read
+      # back its own attestation document. Worth noting for whoever reads this
+      # next: under stg-v0.0.2 this process reached PRODUCTION's container at
+      # peachy-assistant.peachy.containers.tinfoil.dev, which was NOT in this
+      # list and never has been. So either that name resolves through a path
+      # the allowlist does not cover, or sibling containers are reachable
+      # regardless. Either way the allowlist did not stop it, and the thing
+      # that stops it now is attestSelf refusing to default the host.
+      - peachy-assistant-stg.peachy.containers.tinfoil.dev
       # The assistant's tools run in-process, so search_places' two outbound
       # legs are this process's egress: a text query goes to
       # places.googleapis.com and the current-location branch to
@@ -107,7 +116,7 @@ containers:
     # different repo from production's and the image tags should differ too,
     # so that a digest read off a job summary cannot be pasted into the wrong
     # release by muscle memory.
-    image: ghcr.io/kaifaust/peachy-assistant:stg-v0.0.2@sha256:460a057f51ee348f6d7299e806daa0bcedf2ad9c49dd27fa27de1862eef7d31a
+    image: ghcr.io/kaifaust/peachy-assistant:stg-v0.0.3@sha256:165687e8944f5ecd75531ddb8460cbdd32ef1e730a4a81c584048d2d4164b0b8
     networks: [egress]
     env:
       # server/db.ts productionSignal() keys off RENDER; keep the fail-safe
@@ -154,6 +163,21 @@ containers:
       # to be true, which is what the two extra secrets below supply. All three
       # or the runner stays off.
       - PEACHY_AGENT_LEAVES: "1"
+      # WHICH ENCLAVE THIS PROCESS IS, STATED RATHER THAN DEFAULTED, and both
+      # halves are required now (server/agent-leaves.ts attestSelf).
+      #
+      # stg-v0.0.2 stated neither, so the staging enclave dialled
+      # PRODUCTION'S host, verified it against PRODUCTION'S config repo, and
+      # recorded production's measurement (90f29d14…) and release tag (v0.1.7)
+      # as its own. The first assistant it enrolled carried those in its
+      # `pdc2`, and the same measurement became its sealing salt. The
+      # attestation succeeded; it was simply about somebody else.
+      #
+      # A staging enclave stamping production's measurement into credentials is
+      # the precise failure this whole tier is built to make impossible, so it
+      # is now refused rather than defaulted.
+      - PEACHY_WORKER_ENCLAVE_HOST: peachy-assistant-stg.peachy.containers.tinfoil.dev
+      - PEACHY_WORKER_CONFIG_REPO: kaifaust/peachy-enclave-stg
       # The API's device PUBLIC key. This process signs no `pdc1` and CANNOT
       # — that is the whole point of the narrowing — but it still has to CHECK
       # one, because every member of every group the assistant sits in carries
