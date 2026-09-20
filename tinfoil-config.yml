@@ -52,15 +52,15 @@ networks:
     # be the EXTERNAL Render hostname rather than the internal `dpg-…-a` form.
     egress: allowlist
     allow:
-      # PLACEHOLDER. peachy-db-stg does not exist, so neither does its external
-      # hostname. Fill this in from Render's
-      # `/v1/postgres/<id>/connection-info` once the instance is created, and
-      # note that the production instance's hostname
-      # (dpg-d9jrmi67r5hc73ddemi0-a.oregon-postgres.render.com) MUST NOT appear
-      # here. That absence is the structural guarantee: a measured allowlist
-      # without production's database name in it is an enclave that cannot
-      # reach production's database, whatever its DATABASE_URL happens to say.
-      - dpg-STAGING-PLACEHOLDER-a.oregon-postgres.render.com
+      # peachy-db-stg's EXTERNAL hostname (created 2026-09-19; the internal
+      # `dpg-…-a` form is RFC1918 and unreachable from an enclave). The
+      # production instance's hostname —
+      # dpg-d9jrmi67r5hc73ddemi0-a.oregon-postgres.render.com — MUST NOT appear
+      # here, and a test asserts it does not. That absence is the structural
+      # guarantee: a measured allowlist without production's database name in
+      # it is an enclave that cannot reach production's database, whatever its
+      # DATABASE_URL happens to say.
+      - dpg-dank6lf40ujc73c7ki1g-a.oregon-postgres.render.com
       # The model provider. One, as in production.
       - inference.tinfoil.sh
       # Attestation of inference.tinfoil.sh at boot (server/tinfoil-attest.ts
@@ -77,14 +77,20 @@ networks:
       # construction (docs/tinfoil-container.md §Measured egress).
       - places.googleapis.com
       - maps.googleapis.com
-      # PLACEHOLDER. The STAGING R2 buckets' S3 endpoint and public media host,
-      # derived from stg's R2_ACCOUNT_ID and R2_PUBLIC_BASE_URL once those
-      # buckets exist. If staging keeps the production Cloudflare account (the
-      # isolation is the bucket, not the account — docs/staging.md §Which
-      # secrets must differ), the S3 endpoint is the same host production uses
-      # and only the public base URL differs.
+      # R2. The account's S3 endpoint, which staging shares with production —
+      # the isolation is the BUCKET, not the account (docs/staging.md §Which
+      # secrets must differ), and staging writes to peachy-media-stg and
+      # peachy-identity-stg, created 2026-09-19.
+      #
+      # Production's list carries a second R2 entry, the public
+      # `pub-….r2.dev` media host. Staging has none, deliberately: neither
+      # staging bucket was given a managed public domain, staging serves no
+      # media to a browser, and the worker reaches R2 through the S3 endpoint
+      # above rather than through the public one. A host in a measured
+      # allowlist that nothing dials is a claim about a vendor relationship
+      # that does not exist, so it is left out. Give peachy-media-stg a public
+      # domain some day and this is where it goes.
       - c6b00e1a7686e9f69631784067aef768.r2.cloudflarestorage.com
-      - pub-STAGING-PLACEHOLDER.r2.dev
 
 containers:
   - name: worker
@@ -98,7 +104,7 @@ containers:
     # different repo from production's and the image tags should differ too,
     # so that a digest read off a job summary cannot be pasted into the wrong
     # release by muscle memory.
-    image: ghcr.io/kaifaust/peachy-assistant:stg-v0.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    image: ghcr.io/kaifaust/peachy-assistant:stg-v0.0.1@sha256:2ea29d9d12ca65d48960e7de3c08e0d0eb96da777f907b59eeffd256fb74a0e2
     networks: [egress]
     env:
       # server/db.ts productionSignal() keys off RENDER; keep the fail-safe
@@ -129,26 +135,34 @@ containers:
       # job times out into the existing no-verdict path and fails OPEN.
       - PEACHY_TRIAGE_IN_WORKER: "1"
       - PEACHY_TAGGER_IN_WORKER: "1"
-    # Names only; the values are resolved at deploy time from the container's
-    # REPOSITORY secrets first and the ORGANIZATION secrets second. That
-    # resolution order is the entire safety question for this file, and it is
-    # not yet settled for this org — every one of these nine names exists
-    # today as an ORGANIZATION secret holding a PRODUCTION value, and Tinfoil
-    # documents that a name cannot be held at both scopes within one
-    # organization. Read docs/staging.md §The secret-scope collision before
-    # deploying anything from this file; a staging enclave that silently
-    # resolves DATABASE_URL to production's database is the single worst
-    # outcome this whole document is arranged to prevent.
+    # STG_-PREFIXED, AND THAT PREFIX IS LOAD-BEARING. Every unprefixed name
+    # below exists today as an ORGANIZATION secret holding a PRODUCTION value,
+    # and an organization secret is resolvable by every repository in the
+    # organization. So a staging container declaring plain `DATABASE_URL` would
+    # resolve it from organization scope and connect to PRODUCTION'S DATABASE.
+    #
+    # The obvious fix — a repository secret of the same name, scoped to this
+    # config repo — is refused: `409: secret name conflicts with another
+    # scope`, measured 2026-09-19 (docs/staging.md §The secret-scope
+    # collision). A name cannot be held at both scopes in one organization.
+    #
+    # So staging uses names that collide with nothing, held as REPOSITORY
+    # secrets on kaifaust/peachy-enclave-stg, and the image's entrypoint
+    # (deploy/tinfoil/stg-env-prefix.sh, a no-op in production) renames them
+    # to what the process reads. That indirection is inside the image, the
+    # image is pinned by digest, and the digest is what the attestation commits
+    # to — so it is published and checkable, unlike the `--variable` route it
+    # replaced.
     secrets:
-      - DATABASE_URL
-      - TINFOIL_API_KEY
-      - GOOGLE_MAPS_API_KEY
-      - R2_ACCOUNT_ID
-      - R2_ACCESS_KEY_ID
-      - R2_SECRET_ACCESS_KEY
-      - R2_BUCKET
-      - R2_PUBLIC_BASE_URL
-      - R2_PRIVATE_BUCKET
+      - STG_DATABASE_URL
+      - STG_TINFOIL_API_KEY
+      - STG_GOOGLE_MAPS_API_KEY
+      - STG_R2_ACCOUNT_ID
+      - STG_R2_ACCESS_KEY_ID
+      - STG_R2_SECRET_ACCESS_KEY
+      - STG_R2_BUCKET
+      - STG_R2_PUBLIC_BASE_URL
+      - STG_R2_PRIVATE_BUCKET
     read_only: true
     tmpfs:
       /tmp: "size=1g,mode=1777"
