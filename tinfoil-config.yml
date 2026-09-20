@@ -1,8 +1,11 @@
 # Tinfoil Container definition for the STAGING assistant enclave.
 #
-# NOTHING HAS BEEN DEPLOYED FROM THIS FILE. It is the shape of a staging
-# enclave, reviewed in git, so that bringing one up is a checklist rather than
-# an evening of improvisation (docs/staging.md §The staging enclave).
+# This file HAS been deployed from: stg-v0.0.1 came up, attested and was torn
+# down on 2026-09-19, and stg-v0.0.2 turns the agent leaves on. It is still the
+# shape of a staging enclave reviewed in git, so that bringing one up is a
+# checklist rather than an evening of improvisation (docs/staging.md §The
+# staging enclave) — but it is no longer hypothetical, and a change here is a
+# change to something that has run.
 #
 # Read that section before changing a line here. The three things this file
 # exists to guarantee, none of which are cosmetic:
@@ -104,7 +107,7 @@ containers:
     # different repo from production's and the image tags should differ too,
     # so that a digest read off a job summary cannot be pasted into the wrong
     # release by muscle memory.
-    image: ghcr.io/kaifaust/peachy-assistant:stg-v0.0.1@sha256:2ea29d9d12ca65d48960e7de3c08e0d0eb96da777f907b59eeffd256fb74a0e2
+    image: ghcr.io/kaifaust/peachy-assistant:stg-v0.0.2@sha256:460a057f51ee348f6d7299e806daa0bcedf2ad9c49dd27fa27de1862eef7d31a
     networks: [egress]
     env:
       # server/db.ts productionSignal() keys off RENDER; keep the fail-safe
@@ -135,6 +138,32 @@ containers:
       # job times out into the existing no-verdict path and fails OPEN.
       - PEACHY_TRIAGE_IN_WORKER: "1"
       - PEACHY_TAGGER_IN_WORKER: "1"
+      # AGENT LEAVES, ON IN STAGING AND OFF IN PRODUCTION (2026-09-19). This
+      # is the first thing the staging tier was built to rehearse, and the
+      # reason it is measured rather than a `--variable` is that "does this
+      # enclave hold a seat in people's groups" is exactly the kind of claim a
+      # person should be able to read off an attestation rather than take on
+      # trust. The production config does NOT carry this line, and a
+      # docs-claims test ties production's copy to the transparency report's
+      # `agent-leaves-in-production` marker — that test reads
+      # deploy/tinfoil/tinfoil-config.yml only, so this line does not and must
+      # not move it.
+      #
+      # The flag alone is not enough: server/agent-leaves.ts agentLeavesEnabled()
+      # also requires enclaveRootKey() to be non-null and credentialsEnabled()
+      # to be true, which is what the two extra secrets below supply. All three
+      # or the runner stays off.
+      - PEACHY_AGENT_LEAVES: "1"
+      # The API's device PUBLIC key. This process signs no `pdc1` and CANNOT
+      # — that is the whole point of the narrowing — but it still has to CHECK
+      # one, because every member of every group the assistant sits in carries
+      # one. Holding no device key, this is the only way it can.
+      #
+      # Measured rather than mounted, deliberately: it is a public key, and
+      # which server keys a release trusts is exactly the sort of thing the
+      # attestation should commit to. Staging's value is staging's own, so a
+      # `pdc1` from production's API does not verify here and vice versa.
+      - PEACHY_DEVICE_CREDENTIAL_PUBLIC_KEYS: 42S9V9+YGBU6c9TvsLZRikyQLaXnN5qbjvQ/U36Awpc=
     # STG_-PREFIXED, AND THAT PREFIX IS LOAD-BEARING. Every unprefixed name
     # below exists today as an ORGANIZATION secret holding a PRODUCTION value,
     # and an organization secret is resolvable by every repository in the
@@ -163,6 +192,26 @@ containers:
       - STG_R2_BUCKET
       - STG_R2_PUBLIC_BASE_URL
       - STG_R2_PRIVATE_BUCKET
+      # The agent-leaves pair, added for stg-v0.0.2. Both are generated FRESH
+      # for staging, exist only as repository secrets on
+      # kaifaust/peachy-enclave-stg, and are not production's values — staging
+      # seals with its own root key against a throwaway database, so a sealed
+      # row written here is unreadable by production and vice versa, which is
+      # the property that makes a rehearsal safe to run at all.
+      #
+      # THE SECOND ONE IS THE NARROWED KEY, NOT THE DEVICE ROOT. Until
+      # 2026-09-19 enrolling an assistant needed the seed that signs ALL device
+      # credentials, so an enclave holding it could sign a `pdc1` for any
+      # device of any actor. 01faee6a replaced that with an HKDF-SHA256
+      # derivative published for use `agent`, which every verifier — server and
+      # all four clients, offline — refuses to accept on a `pdc1`.
+      #
+      # So staging mounts the DERIVED seed and never the root. Staging's root
+      # exists only on the laptop that generated it, which is what lets this
+      # tier rehearse the refusal honestly: an enclave that was handed the root
+      # anyway would pass a test that proves nothing.
+      - STG_PEACHY_AGENT_ROOT_KEY
+      - STG_PEACHY_AGENT_CREDENTIAL_KEY
     read_only: true
     tmpfs:
       /tmp: "size=1g,mode=1777"
